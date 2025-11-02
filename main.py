@@ -1,5 +1,6 @@
-# main.py — OURO ROTA DIÁRIA (20h)
-# Relatório diário com as 10 maiores probabilidades de alta e queda
+# main.py — OURO ROTA DIÁRIA (COMPLETO DEFINITIVO 20h)
+# Relatório diário automático: probabilidade + variação 24h + direção
+# Totalmente automático — sem ajustes manuais
 
 import os, asyncio, aiohttp, time
 from datetime import datetime, timedelta
@@ -7,19 +8,18 @@ from flask import Flask
 
 # ---------------- CONFIG ----------------
 BINANCE_HTTP = "https://api.binance.com"
-TOP_N = 100
+TOP_N = 120
 REQ_TIMEOUT = 10
-VERSION = "OURO ROTA DIÁRIA 20h"
+VERSION = "OURO ROTA DIÁRIA COMPLETO 20h"
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "").strip()
 CHAT_ID = os.getenv("CHAT_ID", "").strip()
 
 # ---------------- FLASK ----------------
 app = Flask(__name__)
-
 @app.route("/")
 def home():
-    return f"{VERSION} — Relatório diário de probabilidades às 20h (BR)", 200
+    return f"{VERSION} — Relatório diário completo às 20h (BR)", 200
 
 # ---------------- UTILS ----------------
 def now_br():
@@ -38,7 +38,8 @@ async def tg(session, text: str):
 def calc_prob(candles):
     try:
         closes = [float(k[4]) for k in candles]
-        if len(closes) < 2: return 0
+        if len(closes) < 2:
+            return 0
         diffs = [closes[i] - closes[i - 1] for i in range(1, len(closes))]
         ups = sum(1 for d in diffs if d > 0)
         return ups / len(diffs)
@@ -62,23 +63,27 @@ async def get_top_usdt_symbols(session):
     pares = []
     for d in data:
         s = d.get("symbol", "")
-        if not s.endswith("USDT"): continue
-        if any(x in s for x in blocked): continue
+        if not s.endswith("USDT"):
+            continue
+        if any(x in s for x in blocked):
+            continue
         qv = float(d.get("quoteVolume", 0) or 0)
-        pares.append((s, qv))
+        change = float(d.get("priceChangePercent", 0) or 0)
+        pares.append((s, qv, change))
     pares.sort(key=lambda x: x[1], reverse=True)
-    return [s for s, _ in pares[:TOP_N]]
+    return pares[:TOP_N]
 
 # ---------------- RELATÓRIO ----------------
 async def gerar_relatorio():
     async with aiohttp.ClientSession() as session:
-        symbols = await get_top_usdt_symbols(session)
+        print(f"[{now_br()}] Iniciando geração do relatório...")
+        pares = await get_top_usdt_symbols(session)
         resultados = []
 
-        for s in symbols:
+        for s, vol, change in pares:
             kl = await get_klines(session, s)
             prob = calc_prob(kl)
-            resultados.append((s, prob))
+            resultados.append((s, prob, change))
 
         resultados.sort(key=lambda x: x[1], reverse=True)
         altas = resultados[:10]
@@ -87,19 +92,23 @@ async def gerar_relatorio():
         texto = "<b>📊 RELATÓRIO DIÁRIO — OURO ROTA DIÁRIA</b>\n"
         texto += f"⏰ {now_br()} BR\n\n"
         texto += "🔥 <b>Top 10 Probabilidades de Alta:</b>\n"
-        for s, p in altas:
-            texto += f"• {s}: {p*100:.1f}%\n"
+        for s, p, ch in altas:
+            direcao = "⬆️" if ch >= 0 else "⚠️"
+            texto += f"{direcao} {s}: {p*100:.1f}% | {ch:+.2f}% 24h\n"
 
         texto += "\n❄️ <b>Top 10 Probabilidades de Queda:</b>\n"
-        for s, p in quedas:
-            texto += f"• {s}: {p*100:.1f}%\n"
+        for s, p, ch in quedas:
+            direcao = "⬇️" if ch <= 0 else "⚠️"
+            texto += f"{direcao} {s}: {p*100:.1f}% | {ch:+.2f}% 24h\n"
 
-        texto += f"\nTotal analisado: {len(resultados)} pares\n"
+        texto += f"\n📈 Total analisado: {len(resultados)} pares\n"
+        texto += f"\n🟢 Execução automática às 20h (BR)\n"
         await tg(session, texto)
-        print("[RELATÓRIO ENVIADO]")
+        print(f"[{now_br()}] RELATÓRIO ENVIADO COM SUCESSO")
 
 # ---------------- AGENDAMENTO ----------------
 async def agendar_execucao():
+    print(f"[{now_br()}] OURO ROTA DIÁRIA ATIVO — aguardando 20h para gerar o relatório diário.")
     while True:
         agora = datetime.utcnow() - timedelta(hours=3)
         if agora.hour == 20 and agora.minute == 0:
