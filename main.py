@@ -1,6 +1,6 @@
-# main.py — OURO ROTA DIÁRIA (V21.6 — 4H SOMENTE CRUZAMENTO)
-# Detecta tendência apenas por cruzamento real EMA9>EMA20 (sem MACD)
-# Mantém toda a estrutura anterior
+# main.py — OURO ROTA DIÁRIA (V21.8 — EMA9 x MA20 4H CRUZAMENTO REAL)
+# Marca 📊 apenas se EMA9 cruzar e sustentar acima da MA20 (4h)
+# Mantém toda a estrutura e lógica anterior
 
 import os, asyncio, aiohttp, time
 from datetime import datetime, timedelta
@@ -10,7 +10,7 @@ from flask import Flask
 BINANCE_HTTP = "https://api.binance.com"
 TOP_N = 120
 REQ_TIMEOUT = 10
-VERSION = "OURO ROTA DIÁRIA V21.6 — 4H SOMENTE CRUZAMENTO"
+VERSION = "OURO ROTA DIÁRIA V21.8 — EMA9 x MA20 4H CRUZAMENTO REAL"
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "").strip()
 CHAT_ID = os.getenv("CHAT_ID", "").strip()
@@ -35,7 +35,7 @@ async def tg(session, text: str):
     except Exception as e:
         print(f"[TG ERRO] {e}")
 
-# ---------------- FUNÇÃO EMA ----------------
+# ---------------- FUNÇÕES DE MÉDIA ----------------
 def ema(values, n):
     k = 2 / (n + 1)
     e = values[0]
@@ -52,23 +52,34 @@ def ema_series(values, n):
         out.append(e)
     return out
 
-# ---------------- TENDÊNCIA 4H (SOMENTE CRUZAMENTO EMA9>EMA20) ----------------
+# ---------------- TENDÊNCIA 4H (EMA9 x MA20 CRUZAMENTO REAL) ----------------
 def tendencia_4h(candles):
     try:
         closes = [float(k[4]) for k in candles if len(k) >= 5]
         if len(closes) < 100:
             return False
 
-        ema9 = ema_series(closes, 9)
-        ema20 = ema_series(closes, 20)
+        # EMA9
+        ema_vals = ema_series(closes, 9)
+        # MA20 simples (média aritmética)
+        ma20_vals = [sum(closes[i-20:i]) / 20 for i in range(20, len(closes)+1)]
 
-        # últimos 3 candles para confirmar cruzamento e evitar falsos positivos
-        e9_prev2, e9_prev, e9_now = ema9[-3], ema9[-2], ema9[-1]
-        e20_prev2, e20_prev, e20_now = ema20[-3], ema20[-2], ema20[-1]
+        # alinhar comprimentos
+        diff = len(ema_vals) - len(ma20_vals)
+        if diff > 0:
+            ema_vals = ema_vals[diff:]
+        elif diff < 0:
+            ma20_vals = ma20_vals[-len(ema_vals):]
 
-        # cruzamento real e sustentado
-        cruzamento = (e9_prev2 < e20_prev2) and (e9_prev > e20_prev) and (e9_now > e20_now)
-        return cruzamento
+        # últimos 3 valores para confirmar cruzamento
+        e9_prev2, e9_prev, e9_now = ema_vals[-3], ema_vals[-2], ema_vals[-1]
+        ma_prev2, ma_prev, ma_now = ma20_vals[-3], ma20_vals[-2], ma20_vals[-1]
+
+        # cruzamento real (EMA9 cruza MA20 de baixo pra cima e se mantém)
+        cruzou = (e9_prev2 < ma_prev2) and (e9_prev > ma_prev) and (e9_now > ma_now)
+        confirmacao = (e9_now > ma_now) and (e9_prev > ma_prev)
+
+        return cruzou and confirmacao
     except Exception as e:
         print(f"[tendencia_4h ERRO] {e}")
         return False
@@ -229,7 +240,7 @@ async def gerar_relatorio():
         texto += f"\n🟢 Relatório gerado automaticamente no deploy\n"
 
         if tendencia_1h_list:
-            texto += "\n💠 <b>Moedas com tendência no 4h (EMA9>EMA20 - Cruzamento confirmado):</b>\n"
+            texto += "\n💠 <b>Moedas com tendência no 4h (EMA9>MA20 - Cruzamento confirmado):</b>\n"
             texto += ", ".join(tendencia_1h_list)
         else:
             texto += "\n💠 Nenhuma moeda com tendência clara no 4h."
