@@ -1,5 +1,6 @@
-# main.py — OURO ROTA DIÁRIA (V21.3 CORREÇÃO VISUAL 4H)
-# Mesmo código da V21.2, apenas corrige o texto final da lista para "4h"
+# main.py — OURO ROTA DIÁRIA (V21.4 TENDÊNCIA 4H REAL + CRUZAMENTO)
+# Ajusta a lógica de confluência 4h: exige cruzamento real e MACD crescente
+# Mantém todo o resto idêntico às versões anteriores
 
 import os, asyncio, aiohttp, time
 from datetime import datetime, timedelta
@@ -9,7 +10,7 @@ from flask import Flask
 BINANCE_HTTP = "https://api.binance.com"
 TOP_N = 120
 REQ_TIMEOUT = 10
-VERSION = "OURO ROTA DIÁRIA V21.3 — CORREÇÃO VISUAL 4H"
+VERSION = "OURO ROTA DIÁRIA V21.4 — TENDÊNCIA 4H REAL + CRUZAMENTO"
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "").strip()
 CHAT_ID = os.getenv("CHAT_ID", "").strip()
@@ -42,21 +43,32 @@ def ema(values, n):
         e = v * k + e * (1 - k)
     return e
 
-# ---------------- TENDÊNCIA 4H (EMA9>EMA20 e MACD positivo e crescente) ----------------
+# ---------------- TENDÊNCIA 4H REAL + CRUZAMENTO ----------------
 def tendencia_4h(candles):
     try:
         closes = [float(k[4]) for k in candles if len(k) >= 5]
-        if len(closes) < 50:
+        if len(closes) < 60:
             return False
-        ema9 = ema(closes[-50:], 9)
-        ema20 = ema(closes[-50:], 20)
-        ema12 = ema(closes[-50:], 12)
-        ema26 = ema(closes[-50:], 26)
-        macd = ema12 - ema26
-        ema12_prev = ema(closes[-51:-1], 12)
-        ema26_prev = ema(closes[-51:-1], 26)
+
+        # médias móveis atuais e anteriores
+        ema9_now = ema(closes[-40:], 9)
+        ema20_now = ema(closes[-40:], 20)
+        ema9_prev = ema(closes[-45:-5], 9)
+        ema20_prev = ema(closes[-45:-5], 20)
+
+        # MACD atual e anterior
+        ema12_now = ema(closes[-40:], 12)
+        ema26_now = ema(closes[-40:], 26)
+        ema12_prev = ema(closes[-45:-5], 12)
+        ema26_prev = ema(closes[-45:-5], 26)
+        macd_now = ema12_now - ema26_now
         macd_prev = ema12_prev - ema26_prev
-        return ema9 > ema20 and macd > 0 and macd > macd_prev
+
+        # cruzamento recente e força de tendência
+        cruzamento = ema9_prev < ema20_prev and ema9_now > ema20_now
+        tendencia_alta = ema9_now > ema20_now and macd_now > 0 and macd_now > macd_prev
+
+        return cruzamento and tendencia_alta
     except Exception as e:
         print(f"[tendencia_4h ERRO] {e}")
         return False
@@ -217,7 +229,7 @@ async def gerar_relatorio():
         texto += f"\n🟢 Relatório gerado automaticamente no deploy\n"
 
         if tendencia_1h_list:
-            texto += "\n💠 <b>Moedas com tendência no 4h (EMA9>EMA20 e MACD+):</b>\n"
+            texto += "\n💠 <b>Moedas com tendência no 4h (EMA9>EMA20 e MACD+ com cruzamento):</b>\n"
             texto += ", ".join(tendencia_1h_list)
         else:
             texto += "\n💠 Nenhuma moeda com tendência clara no 4h."
