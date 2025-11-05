@@ -1,6 +1,5 @@
-# main.py — OURO ROTA DIÁRIA (V21.9 — EMA9 x MA20 4H CRUZAMENTO REAL 0.15%)
-# Apenas marca 📊 quando há cruzamento confirmado e sustentado da EMA9 sobre a MA20 (4h)
-# Mantém toda a estrutura original e execução automática no deploy
+# main.py — OURO ROTA DIÁRIA (V22.0 — Layout Telegram aprimorado)
+# Mesmo cálculo da V21.9 — apenas layout aprimorado e espaçamento limpo no Telegram
 
 import os, asyncio, aiohttp, time
 from datetime import datetime, timedelta
@@ -10,7 +9,7 @@ from flask import Flask
 BINANCE_HTTP = "https://api.binance.com"
 TOP_N = 120
 REQ_TIMEOUT = 10
-VERSION = "OURO ROTA DIÁRIA V21.9 — EMA9 x MA20 4H CRUZAMENTO REAL 0.15%"
+VERSION = "OURO ROTA DIÁRIA V22.0 — Layout aprimorado Telegram"
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "").strip()
 CHAT_ID = os.getenv("CHAT_ID", "").strip()
@@ -19,7 +18,7 @@ CHAT_ID = os.getenv("CHAT_ID", "").strip()
 app = Flask(__name__)
 @app.route("/")
 def home():
-    return f"{VERSION} — relatório gerado automaticamente no deploy", 200
+    return f"{VERSION} — relatório com layout visual aprimorado", 200
 
 # ---------------- UTILS ----------------
 def now_br():
@@ -52,7 +51,7 @@ def ema_series(values, n):
         out.append(e)
     return out
 
-# ---------------- TENDÊNCIA 4H (EMA9 x MA20 CRUZAMENTO REAL CONFIRMADO) ----------------
+# ---------------- TENDÊNCIA 4H ----------------
 def tendencia_4h(candles):
     try:
         closes = [float(k[4]) for k in candles if len(k) >= 5]
@@ -72,16 +71,15 @@ def tendencia_4h(candles):
         ma_prev2, ma_prev, ma_now = ma20_vals[-3], ma20_vals[-2], ma20_vals[-1]
         price_now = closes[-1]
 
-        # cruzamento real de baixo pra cima e distância mínima de 0.15%
         cruzou = (e9_prev2 < ma_prev2) and (e9_prev < ma_prev) and (e9_now > ma_now)
         dist = (e9_now - ma_now) / price_now
 
-        return cruzou and dist > 0.0015  # 0.15%
+        return cruzou and dist > 0.0015
     except Exception as e:
         print(f"[tendencia_4h ERRO] {e}")
         return False
 
-# ---------------- PROBABILIDADE (1h) ----------------
+# ---------------- PROBABILIDADE ----------------
 def calc_prob(candles, ch24):
     try:
         closes = [float(k[4]) for k in candles]
@@ -89,7 +87,6 @@ def calc_prob(candles, ch24):
         if len(closes) < 30:
             return 0.0, "NEUT", 50, "→", "→", "→", "→"
 
-        # RSI(14)
         deltas = [closes[i] - closes[i-1] for i in range(1, len(closes))]
         gains = [d if d > 0 else 0 for d in deltas]
         losses = [-d if d < 0 else 0 for d in deltas]
@@ -156,7 +153,6 @@ async def get_klines(session, symbol, interval="1h", limit=48):
     except:
         return []
 
-# ---------------- TOP USDT ----------------
 async def get_top_usdt_symbols(session):
     url = f"{BINANCE_HTTP}/api/v3/ticker/24hr"
     async with session.get(url, timeout=REQ_TIMEOUT) as r:
@@ -186,14 +182,11 @@ async def gerar_relatorio():
         for s, vol, change in pares:
             kl_1h = await get_klines(session, s, "1h", 60)
             kl_4h = await get_klines(session, s, "4h", 200)
-
             conf_4h = tendencia_4h(kl_4h)
             prob, regime, rsi, ema_slope, tendencia, vol_tag, mom_tag = calc_prob(kl_1h, change)
             diario_tag = "📊" if conf_4h else "—"
-
             if conf_4h:
                 tendencia_4h_list.append(s)
-
             if regime == "REV":
                 reversao.append((s, prob, change, rsi, ema_slope, tendencia, vol_tag, mom_tag, diario_tag))
             elif regime == "CONT":
@@ -202,30 +195,57 @@ async def gerar_relatorio():
         reversao.sort(key=lambda x: x[1], reverse=True)
         continuacao.sort(key=lambda x: x[1], reverse=True)
 
-        texto = "<b>📊 RELATÓRIO DIÁRIO — OURO ROTA DIÁRIA</b>\n"
-        texto += f"⏰ {now_br()} BR\n\n"
+        texto = (
+            f"📊 <b>RELATÓRIO DIÁRIO — OURO ROTA DIÁRIA</b>\n"
+            f"⏰ {now_br()} BR\n\n"
+            "━━━━━━━━━━━━━━━\n"
+            "🔁 <b>Reversão provável (repique após queda)</b>\n"
+            "━━━━━━━━━━━━━━━\n\n"
+        )
 
-        texto += "🔁 <b>Reversão provável (repique após queda) — Top 10:</b>\n"
         for s, p, ch, rsi, ema_slope, tendencia, vol_tag, mom_tag, diario_tag in reversao[:10]:
-            texto += f"⚠️ {s}: {p*100:.1f}% | {ch:+.2f}% 24h | RSI {rsi:.0f} | EMA9{ema_slope} | Tend{tendencia} | Vol{vol_tag} | Mom{mom_tag} | {diario_tag}\n"
+            texto += (
+                f"⚠️ <b>{s}</b>\n"
+                f"{p*100:.1f}% | {ch:+.2f}% 24h | RSI {rsi:.0f}\n"
+                f"EMA9{ema_slope} | Tend{tendencia} | Vol{vol_tag} | Mom{mom_tag} | {diario_tag}\n"
+                "━━━━━━━━━━━━━━━\n"
+            )
 
-        texto += "\n📈 <b>Continuação provável (tendência saudável) — Top 10:</b>\n"
+        texto += (
+            "\n📈 <b>Continuação provável (tendência saudável)</b>\n"
+            "━━━━━━━━━━━━━━━\n\n"
+        )
+
         for s, p, ch, rsi, ema_slope, tendencia, vol_tag, mom_tag, diario_tag in continuacao[:10]:
-            texto += f"⬆️ {s}: {p*100:.1f}% | {ch:+.2f}% 24h | RSI {rsi:.0f} | EMA9{ema_slope} | Tend{tendencia} | Vol{vol_tag} | Mom{mom_tag} | {diario_tag}\n"
+            texto += (
+                f"⬆️ <b>{s}</b>\n"
+                f"{p*100:.1f}% | {ch:+.2f}% 24h | RSI {rsi:.0f}\n"
+                f"EMA9{ema_slope} | Tend{tendencia} | Vol{vol_tag} | Mom{mom_tag} | {diario_tag}\n"
+                "━━━━━━━━━━━━━━━\n"
+            )
 
-        texto += "\n🧾 <b>Resumo técnico:</b>\n"
-        texto += f"🔁 {len(reversao[:10])} reversões fortes detectadas\n"
-        texto += f"📈 {len(continuacao[:10])} continuações confirmadas\n"
         tempo = round(time.time() - inicio, 1)
-        texto += f"⏱️ Tempo de análise: {tempo}s\n"
-        texto += f"\n📊 Total analisado: {len(pares)} pares\n"
-        texto += f"\n🟢 Relatório gerado automaticamente no deploy\n"
+        texto += (
+            f"\n🧾 <b>Resumo técnico</b>\n"
+            "━━━━━━━━━━━━━━━\n"
+            f"🔁 {len(reversao[:10])} reversões fortes detectadas\n"
+            f"📈 {len(continuacao[:10])} continuações confirmadas\n"
+            f"⏱️ Tempo de análise: {tempo}s\n"
+            f"📊 Total analisado: {len(pares)} pares\n\n"
+            f"🟢 Relatório gerado automaticamente no deploy\n"
+        )
+
+        texto += (
+            "\n━━━━━━━━━━━━━━━\n"
+            "💠 <b>Moedas com tendência real no 4h</b>\n"
+            "(EMA9>MA20 + 0.15% confirmada):\n"
+            "━━━━━━━━━━━━━━━\n"
+        )
 
         if tendencia_4h_list:
-            texto += "\n💠 <b>Moedas com tendência real no 4h (EMA9>MA20 + 0.15% confirmada):</b>\n"
             texto += ", ".join(tendencia_4h_list)
         else:
-            texto += "\n💠 Nenhuma moeda com tendência clara no 4h."
+            texto += "Nenhuma moeda com tendência clara no 4h."
 
         await tg(session, texto)
         print(f"[{now_br()}] RELATÓRIO ENVIADO COM SUCESSO ({tempo}s)")
