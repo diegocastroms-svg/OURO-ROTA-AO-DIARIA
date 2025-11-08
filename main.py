@@ -1,6 +1,7 @@
-# main.py — OURO ROTA DIÁRIA V22.2 (EMA9>MA20 Diário)
-# Relatório diário com detecção de reversões e cruzamento EMA9>MA20 no 1D
-# Execução automática no deploy
+# main.py — OURO TENDÊNCIAS MULTITEMPO (4H, 1D, 1W)
+# Mostra apenas as moedas em tendência de alta confirmada por EMA9 > MA20 (+0.15%)
+# Separado em blocos por timeframe: 4h, 1d e 1w
+# Relatório limpo e direto para Telegram
 
 import os, asyncio, aiohttp, time
 from datetime import datetime, timedelta
@@ -10,7 +11,7 @@ from flask import Flask
 BINANCE_HTTP = "https://api.binance.com"
 TOP_N = 120
 REQ_TIMEOUT = 10
-VERSION = "OURO ROTA DIÁRIA V22.2 (EMA9>MA20 Diário)"
+VERSION = "OURO TENDÊNCIAS MULTITEMPO (4H, 1D, 1W)"
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "").strip()
 CHAT_ID = os.getenv("CHAT_ID", "").strip()
@@ -19,7 +20,7 @@ CHAT_ID = os.getenv("CHAT_ID", "").strip()
 app = Flask(__name__)
 @app.route("/")
 def home():
-    return f"{VERSION} — Execução automática no deploy", 200
+    return f"{VERSION} — relatório gerado automaticamente no deploy", 200
 
 # ---------------- UTILS ----------------
 def now_br():
@@ -35,6 +36,7 @@ async def tg(session, text: str):
     except Exception as e:
         print(f"[TG ERRO] {e}")
 
+# ---------------- MÉDIAS ----------------
 def ema_series(values, period):
     ema = []
     k = 2 / (period + 1)
@@ -54,19 +56,28 @@ def ma_series(values, period):
             ma.append(sum(values[i-period+1:i+1]) / period)
     return ma
 
-def calc_prob(candles):
+# ---------------- FUNÇÃO DE TENDÊNCIA ----------------
+def tendencia_alta(candles):
     try:
-        closes = [float(k[4]) for k in candles]
-        if len(closes) < 2:
-            return 0
-        diffs = [closes[i] - closes[i - 1] for i in range(1, len(closes))]
-        ups = sum(1 for d in diffs if d > 0)
-        return ups / len(diffs)
+        closes = [float(k[4]) for k in candles if len(k) >= 5]
+        if len(closes) < 50:
+            return False
+
+        ema9 = ema_series(closes, 9)
+        ma20 = ma_series(closes, 20)
+
+        e9_prev2, e9_prev, e9_now = ema9[-3], ema9[-2], ema9[-1]
+        m20_prev2, m20_prev, m20_now = ma20[-3], ma20[-2], ma20[-1]
+
+        cruzamento = (e9_prev2 < m20_prev2) and (e9_prev > m20_prev) and (e9_now > m20_now)
+        diferenca = (e9_now - m20_now) / m20_now
+
+        return cruzamento and diferenca > 0.0015
     except:
-        return 0
+        return False
 
 # ---------------- BINANCE ----------------
-async def get_klines(session, symbol, interval="1h", limit=48):
+async def get_klines(session, symbol, interval="4h", limit=200):
     url = f"{BINANCE_HTTP}/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
     try:
         async with session.get(url, timeout=REQ_TIMEOUT) as r:
@@ -87,84 +98,62 @@ async def get_top_usdt_symbols(session):
         if any(x in s for x in blocked):
             continue
         qv = float(d.get("quoteVolume", 0) or 0)
-        change = float(d.get("priceChangePercent", 0) or 0)
-        pares.append((s, qv, change))
+        pares.append((s, qv))
     pares.sort(key=lambda x: x[1], reverse=True)
-    return pares[:TOP_N]
-
-# ---------------- FILTRO TENDÊNCIA 1D ----------------
-def tendencia_1d(candles):
-    try:
-        closes = [float(k[4]) for k in candles if len(k) >= 5]
-        if len(closes) < 50:
-            return False
-
-        ema9 = ema_series(closes, 9)
-        ma20 = ma_series(closes, 20)
-
-        e9_prev2, e9_prev, e9_now = ema9[-3], ema9[-2], ema9[-1]
-        m20_prev2, m20_prev, m20_now = ma20[-3], ma20[-2], ma20[-1]
-
-        cruzamento = (e9_prev2 < m20_prev2) and (e9_prev > m20_prev) and (e9_now > m20_now)
-        diferenca = (e9_now - m20_now) / m20_now
-
-        if cruzamento and diferenca > 0.0015:
-            return True
-        return False
-    except Exception as e:
-        print(f"[tendencia_1d ERRO] {e}")
-        return False
+    return [p[0] for p in pares[:TOP_N]]
 
 # ---------------- RELATÓRIO ----------------
 async def gerar_relatorio():
     async with aiohttp.ClientSession() as session:
-        print(f"[{now_br()}] Iniciando geração do relatório...")
+        inicio = time.time()
         pares = await get_top_usdt_symbols(session)
-        resultados = []
-        tendencia_diaria = []
 
-        for s, vol, change in pares:
-            kl = await get_klines(session, s, "1h", 48)
-            kl_1d = await get_klines(session, s, "1d", 100)
+        tendencia_4h, tendencia_1d, tendencia_1w = [], [], []
 
-            prob = calc_prob(kl)
-            if tendencia_1d(kl_1d):
-                tendencia_diaria.append(s)
+        for s in pares:
+            kl_4h = await get_klines(session, s, "4h", 200)
+            kl_1d = await get_klines(session, s, "1d", 200)
+            kl_1w = await get_klines(session, s, "1w", 200)
 
-            resultados.append((s, prob, change))
+            if tendencia_alta(kl_4h):
+                tendencia_4h.append(s)
+            if tendencia_alta(kl_1d):
+                tendencia_1d.append(s)
+            if tendencia_alta(kl_1w):
+                tendencia_1w.append(s)
 
-        resultados.sort(key=lambda x: x[1], reverse=True)
-        altas = resultados[:10]
-        quedas = resultados[-10:]
+        tempo = round(time.time() - inicio, 1)
+        texto = (
+            f"<b>📊 OURO TENDÊNCIAS MULTITEMPO</b>\n"
+            f"⏰ {now_br()} BR\n\n"
+            f"🟢 Critério: EMA9 > MA20 com +0.15% de confirmação\n"
+            f"📈 Total analisado: {len(pares)} pares\n\n"
+        )
 
-        texto = "<b>📊 RELATÓRIO DIÁRIO — OURO ROTA DIÁRIA</b>\n"
-        texto += f"⏰ {now_br()} BR\n\n"
+        texto += "━━━━━━━━━━━━━━━\n📉 <b>TENDÊNCIA 4H</b>\n━━━━━━━━━━━━━━━\n"
+        texto += ", ".join(tendencia_4h) if tendencia_4h else "Nenhuma moeda em tendência no 4h."
 
-        texto += "🔥 <b>Top 10 Probabilidades de Alta:</b>\n"
-        for s, p, ch in altas:
-            direcao = "⬆️" if ch >= 0 else "⚠️"
-            texto += f"{direcao} {s}: {p*100:.1f}% | {ch:+.2f}% 24h\n"
+        texto += "\n\n━━━━━━━━━━━━━━━\n📊 <b>TENDÊNCIA 1D</b>\n━━━━━━━━━━━━━━━\n"
+        texto += ", ".join(tendencia_1d) if tendencia_1d else "Nenhuma moeda em tendência no 1D."
 
-        texto += "\n❄️ <b>Top 10 Probabilidades de Queda:</b>\n"
-        for s, p, ch in quedas:
-            direcao = "⬇️" if ch <= 0 else "⚠️"
-            texto += f"{direcao} {s}: {p*100:.1f}% | {ch:+.2f}% 24h\n"
+        texto += "\n\n━━━━━━━━━━━━━━━\n🕒 <b>TENDÊNCIA SEMANAL</b>\n━━━━━━━━━━━━━━━\n"
+        texto += ", ".join(tendencia_1w) if tendencia_1w else "Nenhuma moeda em tendência semanal."
 
-        texto += f"\n📈 <b>Moedas com tendência real no 1D</b> (EMA9>MA20 + 0.15% confirmada):\n"
-        if tendencia_diaria:
-            texto += ", ".join(tendencia_diaria)
-        else:
-            texto += "Nenhuma moeda com cruzamento confirmado."
-
-        texto += f"\n\n📊 Total analisado: {len(resultados)} pares\n"
-        texto += f"🟢 Relatório gerado automaticamente no deploy\n"
+        texto += f"\n\n⏱️ Tempo de análise: {tempo}s\n🟢 Relatório gerado automaticamente no deploy"
 
         await tg(session, texto)
-        print(f"[{now_br()}] RELATÓRIO ENVIADO COM SUCESSO")
+        print(f"[{now_br()}] RELATÓRIO ENVIADO COM SUCESSO ({tempo}s)")
+
+# ---------------- EXECUÇÃO ----------------
+async def agendar_execucao():
+    print(f"[{now_br()}] OURO TENDÊNCIAS MULTITEMPO ATIVO — Gerando relatório imediato.")
+    await gerar_relatorio()
+    while True:
+        await asyncio.sleep(3600)
 
 # ---------------- MAIN ----------------
 def start_bot():
-    asyncio.run(gerar_relatorio())
+    asyncio.run(agendar_execucao())
 
 if __name__ == "__main__":
     import threading
