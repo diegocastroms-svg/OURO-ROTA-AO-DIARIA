@@ -1,7 +1,6 @@
-# main.py — OURO TENDÊNCIAS MULTITEMPO (4H, 1D, 1W)
-# Mostra apenas as moedas em tendência de alta confirmada por EMA9 > MA20 (+0.15%)
-# Separado em blocos por timeframe: 4h, 1d e 1w
-# Relatório limpo e direto para Telegram
+# main.py — OURO TENDÊNCIAS REAIS (V23.5)
+# Lista todas as moedas com tendência de alta (EMA9 > MA20) em 4H, 1D e 1W
+# Mostra blocos separados e envia direto pro Telegram
 
 import os, asyncio, aiohttp, time
 from datetime import datetime, timedelta
@@ -9,9 +8,9 @@ from flask import Flask
 
 # ---------------- CONFIG ----------------
 BINANCE_HTTP = "https://api.binance.com"
-TOP_N = 120
+TOP_N = 150
 REQ_TIMEOUT = 10
-VERSION = "OURO TENDÊNCIAS MULTITEMPO (4H, 1D, 1W)"
+VERSION = "OURO TENDÊNCIAS REAIS (4H, 1D, 1W)"
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "").strip()
 CHAT_ID = os.getenv("CHAT_ID", "").strip()
@@ -20,7 +19,7 @@ CHAT_ID = os.getenv("CHAT_ID", "").strip()
 app = Flask(__name__)
 @app.route("/")
 def home():
-    return f"{VERSION} — relatório gerado automaticamente no deploy", 200
+    return f"{VERSION} — relatório de tendências reais (EMA9>MA20)", 200
 
 # ---------------- UTILS ----------------
 def now_br():
@@ -32,47 +31,49 @@ async def tg(session, text: str):
         return
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-        await session.post(url, data={"chat_id": CHAT_ID, "text": text, "parse_mode": "HTML"}, timeout=REQ_TIMEOUT)
+        await session.post(
+            url, data={"chat_id": CHAT_ID, "text": text, "parse_mode": "HTML"}, timeout=REQ_TIMEOUT
+        )
     except Exception as e:
         print(f"[TG ERRO] {e}")
 
 # ---------------- MÉDIAS ----------------
-def ema_series(values, period):
+def ema_series(values, n):
+    k = 2 / (n + 1)
     ema = []
-    k = 2 / (period + 1)
-    for i, v in enumerate(values):
-        if i == 0:
-            ema.append(v)
-        else:
-            ema.append(v * k + ema[-1] * (1 - k))
+    e = values[0]
+    for v in values:
+        e = v * k + e * (1 - k)
+        ema.append(e)
     return ema
 
-def ma_series(values, period):
+def ma_series(values, n):
     ma = []
     for i in range(len(values)):
-        if i < period:
+        if i < n:
             ma.append(sum(values[:i+1]) / (i+1))
         else:
-            ma.append(sum(values[i-period+1:i+1]) / period)
+            ma.append(sum(values[i-n+1:i+1]) / n)
     return ma
 
-# ---------------- FUNÇÃO DE TENDÊNCIA ----------------
-def tendencia_alta(candles):
+# ---------------- TENDÊNCIA REAL ----------------
+def em_tendencia_alta(candles):
     try:
-        closes = [float(k[4]) for k in candles if len(k) >= 5]
+        closes = [float(k[4]) for k in candles]
         if len(closes) < 50:
             return False
 
         ema9 = ema_series(closes, 9)
         ma20 = ma_series(closes, 20)
 
-        e9_prev2, e9_prev, e9_now = ema9[-3], ema9[-2], ema9[-1]
-        m20_prev2, m20_prev, m20_now = ma20[-3], ma20[-2], ma20[-1]
+        # Confirmar que EMA9 > MA20 nas últimas 5 velas
+        ult5 = [(ema9[-i] > ma20[-i]) for i in range(1, 6)]
+        tendencia_alta = all(ult5)
 
-        cruzamento = (e9_prev2 < m20_prev2) and (e9_prev > m20_prev) and (e9_now > m20_now)
-        diferenca = (e9_now - m20_now) / m20_now
+        # Confirmar inclinação positiva (EMA9 subindo)
+        inclinacao = ema9[-1] > ema9[-3]
 
-        return cruzamento and diferenca > 0.0015
+        return tendencia_alta and inclinacao
     except:
         return False
 
@@ -115,18 +116,18 @@ async def gerar_relatorio():
             kl_1d = await get_klines(session, s, "1d", 200)
             kl_1w = await get_klines(session, s, "1w", 200)
 
-            if tendencia_alta(kl_4h):
+            if em_tendencia_alta(kl_4h):
                 tendencia_4h.append(s)
-            if tendencia_alta(kl_1d):
+            if em_tendencia_alta(kl_1d):
                 tendencia_1d.append(s)
-            if tendencia_alta(kl_1w):
+            if em_tendencia_alta(kl_1w):
                 tendencia_1w.append(s)
 
         tempo = round(time.time() - inicio, 1)
         texto = (
-            f"<b>📊 OURO TENDÊNCIAS MULTITEMPO</b>\n"
-            f"⏰ {now_br()} BR\n\n"
-            f"🟢 Critério: EMA9 > MA20 com +0.15% de confirmação\n"
+            f"<b>📊 OURO TENDÊNCIAS REAIS</b>\n"
+            f"⏰ {now_br()} BR\n"
+            f"🟢 Critério: EMA9 acima da MA20 nas últimas 5 velas + inclinação positiva\n"
             f"📈 Total analisado: {len(pares)} pares\n\n"
         )
 
@@ -136,7 +137,7 @@ async def gerar_relatorio():
         texto += "\n\n━━━━━━━━━━━━━━━\n📊 <b>TENDÊNCIA 1D</b>\n━━━━━━━━━━━━━━━\n"
         texto += ", ".join(tendencia_1d) if tendencia_1d else "Nenhuma moeda em tendência no 1D."
 
-        texto += "\n\n━━━━━━━━━━━━━━━\n🕒 <b>TENDÊNCIA SEMANAL</b>\n━━━━━━━━━━━━━━━\n"
+        texto += "\n\n━━━━━━━━━━━━━━━\n🕒 <b>TENDÊNCIA 1W (Semanal)</b>\n━━━━━━━━━━━━━━━\n"
         texto += ", ".join(tendencia_1w) if tendencia_1w else "Nenhuma moeda em tendência semanal."
 
         texto += f"\n\n⏱️ Tempo de análise: {tempo}s\n🟢 Relatório gerado automaticamente no deploy"
@@ -146,7 +147,7 @@ async def gerar_relatorio():
 
 # ---------------- EXECUÇÃO ----------------
 async def agendar_execucao():
-    print(f"[{now_br()}] OURO TENDÊNCIAS MULTITEMPO ATIVO — Gerando relatório imediato.")
+    print(f"[{now_br()}] OURO TENDÊNCIAS REAIS ATIVO — Gerando relatório imediato.")
     await gerar_relatorio()
     while True:
         await asyncio.sleep(3600)
